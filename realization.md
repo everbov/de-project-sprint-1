@@ -2,7 +2,6 @@
 
 ## 1.1. Выясните требования к целевой витрине.
 
-{См. задание на платформе}
 -----------
 
 Цель проекта: собрать витрину для RFM-сегментации пользователей 
@@ -12,8 +11,8 @@
 
 Источник данных: production.tables
 
-Поля витрины: int4
-1. user_id - smallint - идентификатор пользователя
+Поля витрины: 
+1. user_id - int4 - идентификатор пользователя
 2. recency smallint - группа пользователя по давности покупки (от 1 до 5)
 3. frequency smallint - группа пользователя по частоте покупок (от 1 до 5)
 4. monetary_value smallint - группа пользователя по выручке от покупок (от 1 до 5)
@@ -30,8 +29,9 @@
 {См. задание на платформе}
 
 -----------
-
-{Впишите сюда ваш ответ}
+1. recency - max(order_ts), при отсутствии заказов у пользователя ставить минимальную
+2. frequency - count(order_id)
+3. monetary_value - sum(cost)
 
 
 ## 1.3. Проанализируйте качество данных
@@ -50,21 +50,19 @@
 
 ## 1.4. Подготовьте витрину данных
 
-{См. задание на платформе}
-Подготовка представлений  в схеме analysis для таблиц из схемы production:
 
+
+
+
+### 1.4.1. Сделайте VIEW для таблиц из базы production.**
+
+{Подготовка представлений  в схеме analysis для таблиц из схемы production:
+```SQL
 CREATE VIEW analysis.users AS SELECT * FROM production.users;
 CREATE VIEW analysis.orderitems AS SELECT * FROM production.orderitems;
 CREATE VIEW analysis.orderstatuses AS SELECT * FROM production.orderstatuses;
 CREATE VIEW analysis.products AS SELECT * FROM production.products;
 CREATE VIEW analysis.orders AS SELECT * FROM production.orders;
-
-
-### 1.4.1. Сделайте VIEW для таблиц из базы production.**
-
-{См. задание на платформе}
-```SQL
---Впишите сюда ваш ответ
 
 
 ```
@@ -73,19 +71,98 @@ CREATE VIEW analysis.orders AS SELECT * FROM production.orders;
 
 {См. задание на платформе}
 ```SQL
---Впишите сюда ваш ответ
-
+create table analysis.dm_rfm_segments (
+user_id int4 not null primary key, -- идентификатор пользователя
+recency smallint check(recency >= 1 AND recency <= 5), -- давность покупок
+frequency smallint  check(frequency >= 1 AND frequency <= 5), -- частота покупок
+monetary_value smallint  check(monetary_value >= 1 AND monetary_value <= 5) -- выручка
+);
 
 ```
 
 ### 1.4.3. Напишите SQL запрос для заполнения витрины
 
-{См. задание на платформе}
-```SQL
---Впишите сюда ваш ответ
+{Создание вспомогательных таблиц}
 
+```SQL
+CREATE TABLE analysis.tmp_rfm_recency (
+ user_id INT NOT NULL PRIMARY KEY,
+ recency INT NOT NULL CHECK(recency >= 1 AND recency <= 5)
+);
+CREATE TABLE analysis.tmp_rfm_frequency (
+ user_id INT NOT NULL PRIMARY KEY,
+ frequency INT NOT NULL CHECK(frequency >= 1 AND frequency <= 5)
+);
+CREATE TABLE analysis.tmp_rfm_monetary_value (
+ user_id INT NOT NULL PRIMARY KEY,
+ monetary_value INT NOT NULL CHECK(monetary_value >= 1 AND monetary_value <= 5)
+);
 
 ```
 
+{Наполнение вспомогательных таблиц}
+
+recency:
+```SQL
+with orders_data as (select u.id,
+case -- если нет заказов, то записываем самую раннюю дату
+    when max(order_ts) isnull then (select min(order_ts) from production.orders)
+    else max(order_ts)
+end as last_order_date
+from production.orders o
+inner join production.orderstatuses os
+on o.status=os.id and os.key='Closed' and extract('year' from o.order_ts)=2022
+full join production.users u on o.user_id = u.id
+group by u.id)
+---------------------------------------------------------------------------------------------
+insert into analysis.tmp_rfm_recency (
+select id as user_id,
+ntile(5) OVER (ORDER BY last_order_date ASC) AS recency
+from orders_data)
+```
+
+frequency
+```SQL
+with orders_data as (select u.id,
+count(o.status) as orders,
+count(o.payment) as orders_value
+from production.orders o
+inner join production.orderstatuses os
+on o.status=os.id and os.key='Closed' and extract('year' from o.order_ts)=2022
+full join production.users u on o.user_id = u.id
+group by u.id)
+insert into analysis.tmp_rfm_frequency (
+select id as user_id,
+ntile(5) OVER (ORDER BY orders ASC) AS frequency
+from orders_data)
+```
+
+monetary:
+```SQL
+with orders_data as (select u.id,
+count(o.payment) as orders_value
+from production.orders o
+inner join production.orderstatuses os
+on o.status=os.id and os.key='Closed' and extract('year' from o.order_ts)=2022
+full join production.users u on o.user_id = u.id
+group by u.id)
+insert into analysis.tmp_rfm_monetary_value (
+select id as user_id,
+ntile(5) OVER (ORDER BY orders_value ASC) AS monetary
+from orders_data)
+```
 
 
+{Заполнение витрины}
+
+```SQL
+insert into analysis.dm_rfm_segments
+select 
+trf.user_id,
+trr.recency as recency,
+trf.frequency as frequency,
+trmv.monetary_value as monetary_value 
+from analysis.tmp_rfm_frequency trf
+inner join analysis.tmp_rfm_recency trr on trf.user_id=trr.user_id
+inner join analysis.tmp_rfm_monetary_value trmv  on trf.user_id=trmv.user_id 
+```
