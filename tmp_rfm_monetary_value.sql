@@ -1,7 +1,7 @@
 -- заполнение временной таблицы analysis.tmp_rfm_monetary_value
 --delete FROM analysis.tmp_rfm_monetary_value
 with orders_data as (select u.id,
-count(o.payment) as orders_value
+sum(o.payment) as orders_value
 from analysis.orders o
 inner join analysis.orderstatuses os
 on o.status=os.id and os.key='Closed' and extract('year' from o.order_ts)>=2022
